@@ -60,14 +60,6 @@ typedef struct {
   // stats (optional)
   uint64_t total_deflated, total_inflated;
 
-  // FPGA Part
-  int  fpga_ready;         // 1 wenn XRT+Kernel aktiv, sonst 0 => CPU-Fallback
-  void *xrt_dev;           // z.B. xrt::device* (wenn du XRT C++ nutzt)
-  void *xrt_uuid;          // optional: xclbin UUID Kopie
-  void *k_comp;            // xrt::kernel*  (compress)
-  void *k_decomp;          // xrt::kernel*  (decompress, optional)
-  // END FPGA Part
-  
 } req_state_t;
 
 // ===== Codec vtable ===========================================================
@@ -200,55 +192,13 @@ static int lz4_decompress_bytes(const void *in, size_t in_size,
 
 */
 
-// FPGA PART -------------
-
-static int info_get_string(MPI_Info info, const char *key, char *out, int outlen);
-static int info_get_int(MPI_Info info, const char *key, int *out); // optional, falls benutzt
-
-
-static int fpga_zfp_compress_bytes(const void*, size_t, void*, size_t, size_t*, const req_state_t*);
-static int fpga_zfp_decompress_bytes(const void*, size_t, void*, size_t, const req_state_t*);
-
-// Datei-Scope:
-static int req_init_fpga_zfp(req_state_t* st, MPI_Info info) {
-  char name[64];
-  if (!info_get_string(info, "codec:name", name, sizeof(name))) return MPI_SUCCESS;
-  if (strcmp(name, "fpga_zfp") != 0) return MPI_SUCCESS;
-
-  // optional: dims („codec:dimensions“) und zfp:rate lesen
-  char v[128];
-  if (info_get_string(info, "zfp:rate", v, sizeof(v))) st->zfp_rate_bits = atoi(v);
-  if (info_get_string(info, "codec:dimensions", v, sizeof(v)))
-    sscanf(v, "%u,%u,%u", &st->nx, &st->ny, &st->nz);
-
-  // fpga:device / fpga:xclbin lesen
-  char bdf[64]={0}, xclbin[256]={0};
-  int have_dev = info_get_string(info, "fpga:device", bdf, sizeof(bdf));
-  int have_xcl = info_get_string(info, "fpga:xclbin", xclbin, sizeof(xclbin));
-
-#ifdef HAVE_XRT
-  if (have_dev && have_xcl) {
-    // TODO: echte XRT-Initialisierung -> st->fpga_ready=1 bei Erfolg
-    st->fpga_ready = 0; // vorerst CPU-Fallback
-  } else
-#endif
-  {
-    st->fpga_ready = 0; // CPU-Fallback
-  }
-  return MPI_SUCCESS;
-}
-
-// FPGA Part -------------
-
-
 // Registry
-enum { CODEC_RAW=0, CODEC_ZFP=1, /*CODEC_LZ4=2*/ CODEC_FPGA_ZFP=3};
+enum { CODEC_RAW=0, CODEC_ZFP=1 /*, CODEC_LZ4=2*/ };
 
 static codec_vtbl_t g_codecs[] = {
   { "raw", CODEC_RAW, raw_max_cbytes, raw_compress, raw_decompress },
   { "zfp", CODEC_ZFP, zfp_max_cbytes, zfp_do_compress_1d_double, zfp_do_decompress_1d_double },
   /*{ "lz4", CODEC_LZ4, lz4_max_cbytes, lz4_compress_bytes, lz4_decompress_bytes }, // <-- NEWWWWWWWWWWWWWWWW */
-  { "fpga_zfp", CODEC_FPGA_ZFP, zfp_max_cbytes,   fpga_zfp_compress_bytes,   fpga_zfp_decompress_bytes },
 };
 static const int g_num_codecs = sizeof(g_codecs)/sizeof(g_codecs[0]);
 
@@ -359,39 +309,8 @@ static int compressor_req_init(void *buf, int *partitions, MPI_Count *count, MPI
           (long long)*temp_buf_size);
   fflush(stdout);
 
-  // FPGA Part
-  req_init_fpga_zfp(st, info);
-  // END FPGA Part
-
-
   return MPI_SUCCESS;
 }
-
-// FPGA Part
-static int fpga_zfp_compress_bytes(const void* in, size_t raw_bytes,
-                                   void* out, size_t out_cap, size_t* out_size,
-                                   const req_state_t* st)
-{
-  if (!st->fpga_ready) {
-    // Fallback: deine vorhandene CPU-ZFP-Funktion
-    return zfp_do_compress_1d_double(in, raw_bytes, out, out_cap, out_size, st);
-  }
-  // TODO: XRT-Calls für echten FPGA-Compress
-  return MPI_ERR_OTHER;
-}
-
-static int fpga_zfp_decompress_bytes(const void* in, size_t in_size,
-                                     void* out, size_t raw_bytes,
-                                     const req_state_t* st)
-{
-  if (!st->fpga_ready) {
-    // Fallback: CPU-ZFP (nur wenn Bitstrom kompatibel zur Referenz)
-    return zfp_do_decompress_1d_double(in, in_size, out, raw_bytes, st);  }
-  // TODO: XRT-Calls für echten FPGA-Decompress (oder CPU-Fallback beibehalten)
-  return MPI_ERR_OTHER;
-}
-
-// FPGA Part
 
 static int compressor_req_free(void *extra_req_state)
 {
