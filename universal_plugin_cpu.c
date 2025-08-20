@@ -193,22 +193,32 @@ static int lz4_decompress_bytes(const void *in, size_t in_size,
 */
 
 // Registry
-enum { CODEC_RAW=0, CODEC_ZFP=1 /*, CODEC_LZ4=2*/ };
+enum
+{
+  CODEC_RAW=0,
+  CODEC_ZFP=1
+  /*, CODEC_LZ4=2*/ // Das hier für vielleicht LZ4, also lossless
 
-static codec_vtbl_t g_codecs[] = {
+};
+
+static codec_vtbl_t g_codecs[] =
+{
   { "raw", CODEC_RAW, raw_max_cbytes, raw_compress, raw_decompress },
   { "zfp", CODEC_ZFP, zfp_max_cbytes, zfp_do_compress_1d_double, zfp_do_decompress_1d_double },
   /*{ "lz4", CODEC_LZ4, lz4_max_cbytes, lz4_compress_bytes, lz4_decompress_bytes }, // <-- NEWWWWWWWWWWWWWWWW */
 };
+
 static const int g_num_codecs = sizeof(g_codecs)/sizeof(g_codecs[0]);
 
-static const codec_vtbl_t* find_codec_by_name(const char *name, int *out_id) {
+static const codec_vtbl_t* find_codec_by_name(const char *name, int *out_id)
+{
   for (int i=0;i<g_num_codecs;i++) {
     if (strcmp(g_codecs[i].name, name)==0) { if(out_id) *out_id=g_codecs[i].id; return &g_codecs[i]; }
   }
   return NULL;
 }
-static const codec_vtbl_t* find_codec_by_id(int id) {
+static const codec_vtbl_t* find_codec_by_id(int id)
+{
   for (int i=0;i<g_num_codecs;i++) if (g_codecs[i].id == id) return &g_codecs[i];
   return NULL;
 }
@@ -233,11 +243,13 @@ int MPIX_Register_compressor(const char *name,
 
 // ===== Info helpers ===========================================================
 
-static int info_get_string(MPI_Info info, const char *key, char *out, int outlen) {
+static int info_get_string(MPI_Info info, const char *key, char *out, int outlen)
+{
   int flag=0; MPI_Info_get_string(info, key, &outlen, out, &flag);
   return flag;
 }
-static int info_get_int(MPI_Info info, const char *key, int *out) {
+static int info_get_int(MPI_Info info, const char *key, int *out)
+{
   char buf[64]; if (!info_get_string(info, key, buf, sizeof(buf))) return 0;
   *out = atoi(buf); return 1;
 }
@@ -302,12 +314,12 @@ static int compressor_req_init(void *buf, int *partitions, MPI_Count *count, MPI
   st->total_deflated = st->total_inflated = 0;
   *(void**)extra_req_state = st;
 
-  fprintf(stdout, "[universal] req_init: codec=%s id=%d dtype=%s elems=%lld rate=%d cap/part=%lldB\n",
+  // *** CHANGED: stdout -> stderr ***
+  fprintf(stderr, "[PLUGIN] req_init: codec=%s id=%d dtype=%s elems=%lld rate=%d cap/part=%lldB\n",
           vtbl->name, st->codec_id,
           (st->dtype==DT_FLOAT?"float":"double"),
           (long long)st->elems_per_part, st->zfp_rate_bits,
           (long long)*temp_buf_size);
-  fflush(stdout);
 
   return MPI_SUCCESS;
 }
@@ -316,10 +328,10 @@ static int compressor_req_free(void *extra_req_state)
 {
   req_state_t *st = (req_state_t*)extra_req_state;
   if (st) {
-    fprintf(stdout, "[universal] req_free: deflated=%lluB inflated=%lluB\n",
+    // *** CHANGED: stdout -> stderr ***
+    fprintf(stderr, "[PLUGIN] req_free: deflated=%lluB inflated=%lluB\n",
             (unsigned long long)st->total_deflated,
             (unsigned long long)st->total_inflated);
-    fflush(stdout);
     free(st);
   }
   return MPI_SUCCESS;
@@ -360,9 +372,9 @@ static int compressor_deflate(void *buf /*ign*/, int partition, MPI_Count count,
   *size = (MPI_Aint)(sizeof(codec_hdr_t) + out_size);
   st->total_deflated += (uint64_t)*size;
 
-  fprintf(stdout, "[universal] deflate part=%d raw=%zuB -> pkt=%lldB (codec=%d)\n",
+  // *** CHANGED: stdout -> stderr ***
+  fprintf(stderr, "[PLUGIN] deflate part=%d raw=%zuB -> pkt=%lldB (codec=%d)\n",
           partition, raw_bytes, (long long)*size, st->codec_id);
-  fflush(stdout);
   return MPI_SUCCESS;
 }
 
@@ -399,9 +411,9 @@ static int compressor_inflate(void *buf /*ign*/, int partition, MPI_Count count,
   if (rc != MPI_SUCCESS) return rc;
 
   st->total_inflated += (uint64_t)*size;
-  fprintf(stdout, "[universal] inflate part=%d pkt=%lldB -> raw=%zuB (codec=%d)\n",
+  // *** CHANGED: stdout -> stderr ***
+  fprintf(stderr, "[PLUGIN] inflate part=%d pkt=%lldB -> raw=%zuB (codec=%d)\n",
           partition, (long long)*size, raw_bytes, hdr->codec_id);
-  fflush(stdout);
   return MPI_SUCCESS;
 }
 
@@ -411,7 +423,8 @@ __attribute__((visibility("default")))
 int compressor_register(const char *compressor_name, MPI_Info info)
 {
   // We register under whatever name the MPI layer passes (your app uses "codec")
-  fprintf(stdout, "[universal] register name=%s\n", compressor_name); fflush(stdout);
+  // *** CHANGED: stdout -> stderr ***
+  fprintf(stderr, "[PLUGIN] register name=%s\n", compressor_name);
   return MPIX_Register_compressor(compressor_name,
                                   compressor_req_init, compressor_req_free,
                                   compressor_deflate,  compressor_inflate,
